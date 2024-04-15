@@ -845,7 +845,9 @@ installWarp() {
 	warp-cli --accept-tos set-mode proxy
 	warp-cli --accept-tos set-proxy-port 31303
 	warp-cli --accept-tos connect
-	warp-cli --accept-tos enable-always-on
+	#warp-cli --accept-tos enable-always-on   #这里由bug需要通过warp-cli status 手动开启
+	#warp-cli override enable-always-on
+
 
 	#	if [[]];then
 	#	fi
@@ -5473,6 +5475,7 @@ menu() {
 	echoContent skyBlue "-------------------------脚本管理-----------------------------"
 	echoContent yellow "19.查看日志"
 	echoContent yellow "20.卸载脚本"
+	echoContent yellow "21.更新geoip.dat以及geosite.dat"
 	echoContent red "=============================================================="
 	mkdirTools
 	aliasInstall
@@ -5537,6 +5540,12 @@ menu() {
 		;;
 	20)
 		unInstall 1
+		;;
+	21)
+		#unInstall 1
+		wget  -N https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat -P /etc/v2ray-agent/v2ray/
+		wget  -N https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat  -P /etc/v2ray-agent/v2ray/
+
 		;;
 	esac
 }
