@@ -2087,7 +2087,34 @@ randomNum() {
         echo $((RANDOM % $2 + $1))
     fi
 }
-
+# Nginx伪装博客
+ensureNginxStaticPathSafe() {
+    if [[ -z "${nginxStaticPath}" || "${nginxStaticPath}" == "/" ]]; then
+        echoContent red " ---> nginx静态目录异常，已中止，当前目录: ${nginxStaticPath}"
+        exit 1
+    fi
+}
+backupNginxStaticSite() {
+    ensureNginxStaticPathSafe
+    mkdir -p "${nginxStaticPath}" >/dev/null 2>&1
+    if [[ -z "$(find "${nginxStaticPath}" -mindepth 1 -maxdepth 1 2>/dev/null)" ]]; then
+        return 0
+    fi
+    local backupDir="/etc/v2ray-agent/backup/nginx-static"
+    local backupFile=
+    mkdir -p "${backupDir}" >/dev/null 2>&1
+    backupFile="${backupDir}/site_$(date +%Y%m%d_%H%M%S).tar.gz"
+    if tar -czf "${backupFile}" -C "${nginxStaticPath}" . >/dev/null 2>&1; then
+        echoContent green " ---> 已备份伪装站目录: ${backupFile}"
+    else
+        echoContent yellow " ---> 伪装站目录备份失败，继续执行覆盖"
+    fi
+}
+cleanNginxStaticSite() {
+    ensureNginxStaticPathSafe
+    mkdir -p "${nginxStaticPath}" >/dev/null 2>&1
+    find "${nginxStaticPath}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + >/dev/null 2>&1
+}
 generateNginxSpeedtestFile() {
     local speedtestFile="${nginxStaticPath}200MB.zip"
     local targetSize=209715200
@@ -2113,7 +2140,7 @@ generateNginxSpeedtestFile() {
     chmod 644 "${speedtestFile}" >/dev/null 2>&1 || true
     echoContent green " ---> 已生成测速文件: ${speedtestFile}"
 }
-# Nginx伪装博客
+
 nginxBlog() {
     if [[ -n "$1" ]]; then
         echoContent skyBlue "\n进度 $1/${totalProgress} : 添加伪装站点"
@@ -2130,8 +2157,8 @@ nginxBlog() {
         fi
 
         if [[ "${nginxBlogInstallStatus}" == "y" ]]; then
-            rm -rf "${nginxStaticPath}*"
-            #  randomNum=$((RANDOM % 6 + 1))
+            backupNginxStaticSite
+            cleanNginxStaticSite
             randomNum=$(randomNum 1 9)
             if [[ "${release}" == "alpine" ]]; then
                 wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/panhuanghe/v2ray-agent/master/fodder/blog/unable/html${randomNum}.zip"
@@ -2145,8 +2172,8 @@ nginxBlog() {
         fi
     else
         randomNum=$(randomNum 1 9)
-        #        randomNum=$((RANDOM % 6 + 1))
-        rm -rf "${nginxStaticPath}*"
+        backupNginxStaticSite
+        cleanNginxStaticSite
 
         if [[ "${release}" == "alpine" ]]; then
             wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/panhuanghe/v2ray-agent/master/fodder/blog/unable/html${randomNum}.zip"
@@ -5564,15 +5591,10 @@ addNginx302() {
 
 # 更新伪装站
 updateNginxBlog() {
-    if [[ "${coreInstallType}" == "2" ]]; then
-        echoContent red "\n ---> 此功能仅支持Xray-core内核"
-        exit 0
-    fi
-
     echoContent skyBlue "\n进度 $1/${totalProgress} : 更换伪装站点"
 
-    if ! echo "${currentInstallProtocolType}" | grep -q ",0," || [[ -z "${coreInstallType}" ]]; then
-        echoContent red "\n ---> 由于环境依赖，请先安装Xray-core的VLESS_TCP_TLS_Vision"
+    if [[ ! -f "${nginxConfigPath}alone.conf" ]]; then
+        echoContent red "\n ---> 未检测到Nginx站点配置，请先安装Nginx前置协议（例如 VLESS+WS+TLS）"
         exit 0
     fi
     echoContent red "=============================================================="
@@ -5591,10 +5613,6 @@ updateNginxBlog() {
     read -r -p "请选择:" selectInstallNginxBlogType
 
     if [[ "${selectInstallNginxBlogType}" == "10" ]]; then
-        if [[ "${coreInstallType}" == "2" ]]; then
-            echoContent red "\n ---> 此功能仅支持Xray-core内核，请等待后续更新"
-            exit 0
-        fi
         echoContent red "\n=============================================================="
         echoContent yellow "重定向的优先级更高，配置302之后如果更改伪装站点，根路由下伪装站点将不起作用"
         echoContent yellow "如想要伪装站点实现作用需删除302重定向配置\n"
@@ -5625,7 +5643,8 @@ updateNginxBlog() {
         fi
     fi
     if [[ "${selectInstallNginxBlogType}" =~ ^[1-9]$ ]]; then
-        rm -rf "${nginxStaticPath}*"
+        backupNginxStaticSite
+        cleanNginxStaticSite
 
         if [[ "${release}" == "alpine" ]]; then
             wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/panhuanghe/v2ray-agent/master/fodder/blog/unable/html${selectInstallNginxBlogType}.zip"
@@ -5640,6 +5659,7 @@ updateNginxBlog() {
         echoContent red " ---> 选择错误，请重新选择"
         updateNginxBlog
     fi
+
     generateNginxSpeedtestFile
 }
 
@@ -8014,6 +8034,11 @@ customSingBoxInstall() {
     echoContent yellow "10.Naive"
     echoContent yellow "11.VMess+TLS+HTTPUpgrade"
     echoContent yellow "13.anytls"
+    echo
+    echoContent yellow "推荐组合（自有域名 + Cloudflare 场景）：1,7,6"
+    echoContent yellow "1 VLESS+TLS+WS ：CF CDN 主力"
+    echoContent yellow "7 VLESS+Reality+Vision ：直连高速主力"
+    echoContent yellow "6 Hysteria2 ：高性能备用"
 
     read -r -p "请选择[多选]，[例如:1,2,3]:" selectCustomInstallType
     echoContent skyBlue "--------------------------------------------------------------"
@@ -8404,8 +8429,15 @@ installSubscribe() {
             fi
         fi
         echoContent yellow "开始配置订阅，请输入订阅的端口\n"
+        echoContent yellow "Cloudflare 代理 HTTPS 仅支持端口: 443/2053/2083/2087/2096/8443；其他端口只能直连。"
 
         mapfile -t result < <(initSingBoxPort "${subscribePort}")
+        local subscribeListenPort=${result[-1]}
+        if ! echo "443 2053 2083 2087 2096 8443" | grep -qw "${subscribeListenPort}"; then
+            echoContent yellow "提示：端口 ${subscribeListenPort} 不在 Cloudflare 代理允许列表，使用时只能直连。"
+        else
+            echoContent green "端口 ${subscribeListenPort} 可被 Cloudflare 代理。"
+        fi
         echo
         echoContent yellow " ---> 开始配置订阅的伪装站点\n"
         nginxBlog
@@ -9073,6 +9105,116 @@ subscribe() {
     fi
 }
 
+# sing-box 伪装域名自检/修复
+checkSingBoxCamouflage() {
+
+    if [[ "${coreInstallType}" != "2" && -z "${singBoxConfigPath}" ]]; then
+        echoContent yellow " ---> 未检测到 sing-box 环境，跳过。"
+        return
+    fi
+
+    readNginxSubscribe
+
+    local targetDomain=
+    if [[ -n "${currentHost}" ]]; then
+        targetDomain="${currentHost}"
+    elif [[ -n "${domain}" ]]; then
+        targetDomain="${domain}"
+    else
+        targetDomain="${subscribeDomain}"
+    fi
+
+    if [[ -z "${targetDomain}" ]]; then
+        echoContent red " ---> 未找到域名信息，请先完成域名配置。"
+        return
+    fi
+
+    local targetPort="${subscribePort}"
+    if [[ -z "${targetPort}" ]]; then
+        echoContent yellow "未检测到订阅端口，请输入。"
+        echoContent yellow "Cloudflare 代理 HTTPS 仅支持: 443/2053/2083/2087/2096/8443，其他端口仅直连。"
+        mapfile -t result < <(initSingBoxPort "${subscribePort}")
+        targetPort=${result[-1]}
+    fi
+
+    if ! echo "443 2053 2083 2087 2096 8443" | grep -qw "${targetPort}"; then
+        echoContent yellow "提示：端口 ${targetPort} 不在 Cloudflare 代理列表，使用时仅直连。"
+    else
+        echoContent green "端口 ${targetPort} 可被 Cloudflare 代理。"
+    fi
+
+    local certCrt="/etc/v2ray-agent/tls/${targetDomain}.crt"
+    local certKey="/etc/v2ray-agent/tls/${targetDomain}.key"
+
+    if [[ ! -f "${certCrt}" || ! -f "${certKey}" ]]; then
+        echoContent red " ---> 未找到证书 ${certCrt} / ${certKey}，请先申请证书后再修复。"
+        return
+    fi
+
+    local needRebuildSubscribe=false
+    if [[ ! -f "${nginxConfigPath}subscribe.conf" ]]; then
+        needRebuildSubscribe=true
+    else
+        local confDomain=
+        confDomain=$(grep -m1 "server_name" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}' | sed 's/;//')
+        local confPort=
+        confPort=$(grep -m1 "listen" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}')
+        if [[ "${confDomain}" != "${targetDomain}" || -z "${confPort}" ]]; then
+            needRebuildSubscribe=true
+        fi
+    fi
+
+    if [[ "${needRebuildSubscribe}" == true ]]; then
+        echoContent yellow "重建订阅 Nginx 配置: ${nginxConfigPath}subscribe.conf"
+
+        local listenIPv6=
+        if [[ -n "$(curl --connect-timeout 2 -s -6 http://www.cloudflare.com/cdn-cgi/trace | grep 'ip')" ]]; then
+            listenIPv6="listen [::]:${targetPort} ssl;"
+        fi
+        local nginxSubscribeListen="listen ${targetPort} ssl so_keepalive=on;http2 on;${listenIPv6}"
+
+        cat <<EOF >${nginxConfigPath}subscribe.conf
+server {
+    ${nginxSubscribeListen}
+    server_name ${targetDomain};
+    ssl_certificate /etc/v2ray-agent/tls/${targetDomain}.crt;
+    ssl_certificate_key /etc/v2ray-agent/tls/${targetDomain}.key;
+    ssl_protocols              TLSv1.2 TLSv1.3;
+    ssl_ciphers                TLS13_AES_128_GCM_SHA256:TLS13_AES_256_GCM_SHA384:TLS13_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers  on;
+
+    resolver                   1.1.1.1 valid=60s;
+    resolver_timeout           2s;
+    client_max_body_size 100m;
+    root ${nginxStaticPath};
+    location ~ ^/s/(clashMeta|default|clashMetaProfiles|sing-box|sing-box_profiles)/(.*) {
+        default_type 'text/plain; charset=utf-8';
+        alias /etc/v2ray-agent/subscribe/\$1/\$2;
+    }
+    location / {
+    }
+}
+EOF
+    fi
+
+    local needRebuildAlone=false
+    if [[ ! -f "${nginxConfigPath}alone.conf" ]]; then
+        needRebuildAlone=true
+    elif ! grep -q "${targetDomain}" "${nginxConfigPath}alone.conf"; then
+        needRebuildAlone=true
+    fi
+
+    if [[ "${needRebuildAlone}" == true ]]; then
+        echoContent yellow "重建伪装站配置: ${nginxConfigPath}alone.conf"
+        nginxBlog
+    fi
+
+    handleNginx stop
+    handleNginx start
+    generateNginxSpeedtestFile
+    echoContent green " ---> sing-box 伪装域名自检/修复完成"
+}
+
 # 更新远程订阅
 updateRemoteSubscribe() {
 
@@ -9652,6 +9794,7 @@ menu() {
     echoContent yellow "12.添加新端口"
     echoContent yellow "13.BT下载管理"
     echoContent yellow "15.域名黑名单"
+    echoContent yellow "19.伪装域名自检/修复(sing-box)"
     echoContent skyBlue "-------------------------版本管理-----------------------------"
     echoContent yellow "16.core管理"
     echoContent yellow "17.更新脚本"
@@ -9716,6 +9859,9 @@ menu() {
         ;;
     18)
         bbrInstall
+        ;;
+    19)
+        checkSingBoxCamouflage
         ;;
     20)
         unInstall 1

@@ -1662,6 +1662,33 @@ randomPathFunction() {
     echoContent skyBlue "\n----------------------------"
 }
 # Nginx disguise blog
+ensureNginxStaticPathSafe() {
+    if [[ -z "${nginxStaticPath}" || "${nginxStaticPath}" == "/" ]]; then
+        echoContent red " ---> Invalid nginx static path, abort. Current path: ${nginxStaticPath}"
+        exit 1
+    fi
+}
+backupNginxStaticSite() {
+    ensureNginxStaticPathSafe
+    mkdir -p "${nginxStaticPath}" >/dev/null 2>&1
+    if [[ -z "$(find "${nginxStaticPath}" -mindepth 1 -maxdepth 1 2>/dev/null)" ]]; then
+        return 0
+    fi
+    local backupDir="/etc/v2ray-agent/backup/nginx-static"
+    local backupFile=
+    mkdir -p "${backupDir}" >/dev/null 2>&1
+    backupFile="${backupDir}/site_$(date +%Y%m%d_%H%M%S).tar.gz"
+    if tar -czf "${backupFile}" -C "${nginxStaticPath}" . >/dev/null 2>&1; then
+        echoContent green " ---> Backed up static site directory: ${backupFile}"
+    else
+        echoContent yellow " ---> Static site backup failed, continue replacing content"
+    fi
+}
+cleanNginxStaticSite() {
+    ensureNginxStaticPathSafe
+    mkdir -p "${nginxStaticPath}" >/dev/null 2>&1
+    find "${nginxStaticPath}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + >/dev/null 2>&1
+}
 generateNginxSpeedtestFile() {
     local speedtestFile="${nginxStaticPath}200MB.zip"
     local targetSize=209715200
@@ -1685,7 +1712,7 @@ generateNginxSpeedtestFile() {
     fi
 
     chmod 644 "${speedtestFile}" >/dev/null 2>&1 || true
-    echoContent green " ---> 已生成测速文件: ${speedtestFile}"
+    echoContent green " ---> Generated speedtest file: ${speedtestFile}"
 }
 nginxBlog() {
     echoContent skyBlue "\nProgress$1/${totalProgress}: Add fake site"
@@ -1693,16 +1720,18 @@ nginxBlog() {
         echo
         read -r -p "Detected installation of fake site, do you need to reinstall [y/n]:" nginxBlogInstallStatus
         if [[ "${nginxBlogInstallStatus}" == "y" ]]; then
-            rm -rf "${nginxStaticPath}"
-            randomNum=$((RANDOM % 6 + 1))
+            backupNginxStaticSite
+            cleanNginxStaticSite
+            randomNum=$((RANDOM % 9 + 1))
             wget -q -P "${nginxStaticPath}" https://raw.githubusercontent.com/panhuanghe/v2ray-agent/master/fodder/blog/unable/html${randomNum}.zip >/dev/null
             unzip -o "${nginxStaticPath}html${randomNum}.zip" -d "${nginxStaticPath}" >/dev/null
             rm -f "${nginxStaticPath}html${randomNum}.zip*"
             echoContent green " ---> Added fake site successfully"
         fi
     else
-        randomNum=$((RANDOM % 6 + 1))
-        rm -rf "${nginxStaticPath}"
+        randomNum=$((RANDOM % 9 + 1))
+        backupNginxStaticSite
+        cleanNginxStaticSite
         wget -q -P "${nginxStaticPath}" https://raw.githubusercontent.com/panhuanghe/v2ray-agent/master/fodder/blog/unable/html${randomNum}.zip >/dev/null
         unzip -o "${nginxStaticPath}html${randomNum}.zip" -d "${nginxStaticPath}" >/dev/null
         rm -f "${nginxStaticPath}html${randomNum}.zip*"
@@ -4539,8 +4568,8 @@ addNginx302() {
 updateNginxBlog() {
     echoContent skyBlue "\nProgress$1/${totalProgress}: Change disguise site"
 
-    if ! echo "${currentInstallProtocolType}" | grep -q "0" || [[ -z "${coreInstallType}" ]]; then
-        echoContent red "\n ---> Due to environmental dependencies, please install Xray-core's VLESS_TCP_TLS_Vision first"
+    if [[ ! -f "${nginxConfigPath}alone.conf" ]]; then
+        echoContent red "\n ---> Nginx site config was not found, please install an Nginx-fronted protocol first (for example: VLESS+WS+TLS)"
         exit 0
     fi
     echoContent red "================================================== =========== ===="
@@ -4589,7 +4618,8 @@ updateNginxBlog() {
         fi
     fi
     if [[ "${selectInstallNginxBlogType}" =~ ^[1-9]$ ]]; then
-        rm -rf "${nginxStaticPath}"
+        backupNginxStaticSite
+        cleanNginxStaticSite
 
         wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/panhuanghe/v2ray-agent/master/fodder/blog/unable/html${selectInstallNginxBlogType}.zip" >/dev/null
 
@@ -4600,6 +4630,7 @@ updateNginxBlog() {
         echoContent red " ---> Wrong selection, please select again"
         updateNginxBlog
     fi
+
     generateNginxSpeedtestFile
 }
 
@@ -4626,7 +4657,15 @@ addCorePort() {
         exit 0
     elif [[ "${selectNewPortType}" == "2" ]]; then
         read -r -p "Please enter the port number:" newPort
+        echoContent yellow "Cloudflare proxy HTTPS ports: 443/2053/2083/2087/2096/8443. Other ports will be direct-only."
         read -r -p "Please enter the default port number. The subscription port and node port will be changed at the same time. [Enter] Default 443:" defaultPort
+        if [[ -n "${defaultPort}" ]]; then
+            if ! echo "443 2053 2083 2087 2096 8443" | grep -qw "${defaultPort}"; then
+                echoContent yellow "Notice: port ${defaultPort} is not in Cloudflare proxy list; it will be direct-only."
+            else
+                echoContent green "Port ${defaultPort} can be proxied by Cloudflare."
+            fi
+        fi
 
         if [[ -n "${defaultPort}" ]]; then
             rm -rf "$(find ${configPath}* | grep "default")"
@@ -7024,6 +7063,117 @@ addOtherSubscribe() {
         fi
     fi
 }
+
+# sing-box camouflage domain self-check / repair
+checkSingBoxCamouflageEn() {
+
+    if [[ "${coreInstallType}" != "2" && -z "${singBoxConfigPath}" ]]; then
+        echoContent yellow " ---> sing-box not detected, skip."
+        return
+    fi
+
+    readNginxSubscribe
+
+    local targetDomain=
+    if [[ -n "${currentHost}" ]]; then
+        targetDomain="${currentHost}"
+    elif [[ -n "${domain}" ]]; then
+        targetDomain="${domain}"
+    else
+        targetDomain="${subscribeDomain}"
+    fi
+
+    if [[ -z "${targetDomain}" ]]; then
+        echoContent red " ---> Domain not found, please configure domain first."
+        return
+    fi
+
+    local targetPort="${subscribePort}"
+    if [[ -z "${targetPort}" ]]; then
+        echoContent yellow "Subscription port not found, please input."
+        echoContent yellow "Cloudflare proxy HTTPS ports: 443/2053/2083/2087/2096/8443; others are direct-only."
+        mapfile -t result < <(initSingBoxPort "${subscribePort}")
+        targetPort=${result[-1]}
+    fi
+
+    if ! echo "443 2053 2083 2087 2096 8443" | grep -qw "${targetPort}"; then
+        echoContent yellow "Notice: port ${targetPort} is not Cloudflare-proxied; it will be direct-only."
+    else
+        echoContent green "Port ${targetPort} can be proxied by Cloudflare."
+    fi
+
+    local certCrt="/etc/v2ray-agent/tls/${targetDomain}.crt"
+    local certKey="/etc/v2ray-agent/tls/${targetDomain}.key"
+
+    if [[ ! -f "${certCrt}" || ! -f "${certKey}" ]]; then
+        echoContent red " ---> Certificate missing (${certCrt}/${certKey}); please issue a certificate first."
+        return
+    fi
+
+    local needRebuildSubscribe=false
+    if [[ ! -f "${nginxConfigPath}subscribe.conf" ]]; then
+        needRebuildSubscribe=true
+    else
+        local confDomain=
+        confDomain=$(grep -m1 "server_name" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}' | sed 's/;//')
+        local confPort=
+        confPort=$(grep -m1 "listen" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}')
+        if [[ "${confDomain}" != "${targetDomain}" || -z "${confPort}" ]]; then
+            needRebuildSubscribe=true
+        fi
+    fi
+
+    if [[ "${needRebuildSubscribe}" == true ]]; then
+        echoContent yellow "Rebuild Nginx subscribe config: ${nginxConfigPath}subscribe.conf"
+
+        local listenIPv6=
+        if [[ -n "$(curl --connect-timeout 2 -s -6 http://www.cloudflare.com/cdn-cgi/trace | grep 'ip')" ]]; then
+            listenIPv6="listen [::]:${targetPort} ssl;"
+        fi
+        local nginxSubscribeListen="listen ${targetPort} ssl so_keepalive=on;http2 on;${listenIPv6}"
+
+        cat <<EOF >${nginxConfigPath}subscribe.conf
+server {
+    ${nginxSubscribeListen}
+    server_name ${targetDomain};
+    ssl_certificate /etc/v2ray-agent/tls/${targetDomain}.crt;
+    ssl_certificate_key /etc/v2ray-agent/tls/${targetDomain}.key;
+    ssl_protocols              TLSv1.2 TLSv1.3;
+    ssl_ciphers                TLS13_AES_128_GCM_SHA256:TLS13_AES_256_GCM_SHA384:TLS13_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers  on;
+
+    resolver                   1.1.1.1 valid=60s;
+    resolver_timeout           2s;
+    client_max_body_size 100m;
+    root ${nginxStaticPath};
+    location ~ ^/s/(clashMeta|default|clashMetaProfiles|sing-box|sing-box_profiles)/(.*) {
+        default_type 'text/plain; charset=utf-8';
+        alias /etc/v2ray-agent/subscribe/\$1/\$2;
+    }
+    location / {
+    }
+}
+EOF
+    fi
+
+    local needRebuildAlone=false
+    if [[ ! -f "${nginxConfigPath}alone.conf" ]]; then
+        needRebuildAlone=true
+    elif ! grep -q "${targetDomain}" "${nginxConfigPath}alone.conf"; then
+        needRebuildAlone=true
+    fi
+
+    if [[ "${needRebuildAlone}" == true ]]; then
+        echoContent yellow "Rebuild camouflage site config: ${nginxConfigPath}alone.conf"
+        nginxBlog
+    fi
+
+    handleNginx stop
+    handleNginx start
+    generateNginxSpeedtestFile
+    echoContent green " ---> sing-box camouflage domain check/repair completed"
+}
+
 # clashMeta configuration file
 clashMetaConfig() {
     local url=$1
@@ -7960,6 +8110,7 @@ menu() {
     echoContent yellow "13.BT download management"
     echoContent yellow "14.Switch alpn"
     echoContent yellow "15.Domain name blacklist"
+    echoContent yellow "21.Check/repair sing-box camouflage domain"
     echoContent skyBlue "-------------------------Version Management-------------------- ---------"
     echoContent yellow "16.core management"
     echoContent yellow "17.Update script"
@@ -8031,6 +8182,9 @@ menu() {
         ;;
     20)
         unInstall 1
+        ;;
+    21)
+        checkSingBoxCamouflageEn
         ;;
     esac
 }
