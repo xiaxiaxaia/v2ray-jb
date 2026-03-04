@@ -121,4 +121,5 @@ wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/panhu
 - `伪装站管理(菜单8)` 已适配 `sing-box`：按 `Nginx` 配置存在性判定，不再强依赖 `Xray-core`。
 - 为降低配置冲突风险，更换伪装站前会自动备份静态站点目录到 `/etc/v2ray-agent/backup/nginx-static/`。
 - Cloudflare 代理 HTTPS 端口仅支持 443/2053/2083/2087/2096/8443；订阅/伪装端口请选择该列表，否则仅直连。详见 `documents/cloudflare_speedtest.md`。
+- 部署与路径、Cloudflare 橙灰规则、测速文件规范见 `documents/deploy_guide.md`。
 - 详细说明见 `documents/migration_sync_2026-03.md`。

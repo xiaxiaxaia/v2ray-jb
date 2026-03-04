@@ -9206,13 +9206,54 @@ EOF
 
     if [[ "${needRebuildAlone}" == true ]]; then
         echoContent yellow "重建伪装站配置: ${nginxConfigPath}alone.conf"
-        nginxBlog
+        read -r -p "是否选择伪装模板[y/n]:" selectNginxBlogTemplate
+        if [[ "${selectNginxBlogTemplate}" == "y" ]]; then
+            nginxBlog
+        fi
+        rebuildAloneConf "${targetDomain}" "${targetPort}"
+        generateNginxSpeedtestFile
     fi
 
     handleNginx stop
     handleNginx start
-    generateNginxSpeedtestFile
-    echoContent green " ---> sing-box 伪装域名自检/修复完成"
+    if [[ -f "${nginxConfigPath}alone.conf" ]]; then
+        echoContent green " ---> sing-box 伪装域名自检/修复完成"
+    else
+        echoContent red " ---> 伪装站配置生成失败，请检查证书与目录权限"
+    fi
+}
+
+# 重建 alone.conf
+rebuildAloneConf() {
+    local domain=$1
+    local port=$2
+    if [[ -z "${domain}" || -z "${port}" ]]; then
+        echoContent red " ---> 缺少域名或端口，无法重建 alone.conf"
+        return
+    fi
+    if [[ -f "${nginxConfigPath}alone.conf" ]]; then
+        cp "${nginxConfigPath}alone.conf" /etc/v2ray-agent/alone_backup.conf 2>/dev/null || true
+    fi
+    cat <<EOF >${nginxConfigPath}alone.conf
+server {
+    listen ${port} ssl;
+    listen [::]:${port} ssl;
+    server_name ${domain};
+    ssl_certificate /etc/v2ray-agent/tls/${domain}.crt;
+    ssl_certificate_key /etc/v2ray-agent/tls/${domain}.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers TLS13_AES_128_GCM_SHA256:TLS13_AES_256_GCM_SHA384:TLS13_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers on;
+
+    root ${nginxStaticPath};
+    index index.html index.htm;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+    echoContent green " ---> alone.conf 已生成: ${nginxConfigPath}alone.conf"
 }
 
 # 更新远程订阅
