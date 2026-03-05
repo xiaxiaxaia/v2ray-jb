@@ -4425,6 +4425,7 @@ EOF
     if echo "${selectCustomInstallType}" | grep -q ",1," || [[ "$1" == "all" ]]; then
         echoContent yellow "\n===================== 配置VLESS+WS =====================\n"
         echoContent skyBlue "\n开始配置VLESS+WS协议端口"
+        echoContent yellow "CDN 推荐端口（不含 443）: 2053/2083/2087/2096/8443"
         echo
         mapfile -t result < <(initSingBoxPort "${singBoxVLESSWSPort}")
         echoContent green "\n ---> VLESS_WS端口：${result[-1]}"
@@ -4466,6 +4467,7 @@ EOF
     if echo "${selectCustomInstallType}" | grep -q ",3," || [[ "$1" == "all" ]]; then
         echoContent yellow "\n===================== 配置VMess+ws =====================\n"
         echoContent skyBlue "\n开始配置VMess+ws协议端口"
+        echoContent yellow "CDN 推荐端口（不含 443）: 2053/2083/2087/2096/8443"
         echo
         mapfile -t result < <(initSingBoxPort "${singBoxVMessWSPort}")
         echoContent green "\n ---> VMess_ws端口：${result[-1]}"
@@ -8040,6 +8042,7 @@ customSingBoxInstall() {
     echoContent yellow "10.Naive"
     echoContent yellow "11.VMess+TLS+HTTPUpgrade"
     echoContent yellow "13.anytls"
+    echoContent yellow "CDN 推荐端口（适用于 1/3，不含 443）: 2053/2083/2087/2096/8443"
     echo
     echoContent yellow "推荐组合（自有域名 + Cloudflare 场景）：1,7,6"
     echoContent yellow "1 VLESS+TLS+WS ：CF CDN 主力"
@@ -8435,8 +8438,9 @@ installSubscribe() {
                 exit 0
             fi
         fi
-        echoContent yellow "开始配置订阅（建议端口默认 443）\n"
+        echoContent yellow "开始配置订阅（强烈建议 443）\n"
         echoContent yellow "CDN 推荐端口（不含 443）: 2053/2083/2087/2096/8443"
+        echoContent yellow "订阅端口强烈建议使用 443（与伪装站点、测速文件同入口）"
         echoContent yellow "Cloudflare 代理 HTTPS 支持端口: 443/2053/2083/2087/2096/8443；其他端口只能直连。"
         local subscribeListenPort="${preferredSubscribePort}"
         if [[ -n "${subscribeListenPort}" ]]; then
@@ -9631,7 +9635,8 @@ initRealityClientServersName() {
                     echoContent skyBlue "\n================ Reality 与订阅联动配置 =================\n"
                     echoContent yellow "检测到当前未配置订阅端口。"
                     echoContent yellow "如继续使用当前域名作为 Reality 目标域名，建议现在合并执行订阅初始化，避免同端口场景 /s 路由 404。"
-                    echoContent yellow "确认后将在下一步输入订阅端口（默认443）。"
+                    echoContent yellow "订阅端口强烈建议使用 443（与伪装站点、测速文件同入口）。"
+                    echoContent yellow "确认后将在下一步输入订阅端口（回车默认443）。"
                     read -r -p "是否现在合并执行订阅初始化？[Y/n]:" mergeSubscribeInitStatus
                     if [[ "${mergeSubscribeInitStatus}" =~ ^[0-9]+$ ]]; then
                         if ((mergeSubscribeInitStatus >= 1 && mergeSubscribeInitStatus <= 65535)); then
