@@ -8414,6 +8414,7 @@ manageAccount() {
 
 # 安装订阅
 installSubscribe() {
+    local preferredSubscribePort=$1
     readNginxSubscribe
     local nginxSubscribeListen=
     local nginxSubscribeSSL=
@@ -8437,8 +8438,13 @@ installSubscribe() {
         echoContent yellow "开始配置订阅（建议端口默认 443）\n"
         echoContent yellow "CDN 推荐端口（不含 443）: 2053/2083/2087/2096/8443"
         echoContent yellow "Cloudflare 代理 HTTPS 支持端口: 443/2053/2083/2087/2096/8443；其他端口只能直连。"
-        local subscribeListenPort=
-        read -r -p "请输入订阅端口[需合法]，[回车]默认443:" subscribeListenPort
+        local subscribeListenPort="${preferredSubscribePort}"
+        if [[ -n "${subscribeListenPort}" ]]; then
+            echoContent yellow " ---> 使用预设订阅端口: ${subscribeListenPort}"
+        fi
+        if [[ -z "${subscribeListenPort}" ]]; then
+            read -r -p "请输入订阅端口[需合法]，[回车]默认443:" subscribeListenPort
+        fi
         if [[ -z "${subscribeListenPort}" ]]; then
             subscribeListenPort=443
         fi
@@ -9625,10 +9631,19 @@ initRealityClientServersName() {
                     echoContent skyBlue "\n================ Reality 与订阅联动配置 =================\n"
                     echoContent yellow "检测到当前未配置订阅端口。"
                     echoContent yellow "如继续使用当前域名作为 Reality 目标域名，建议现在合并执行订阅初始化，避免同端口场景 /s 路由 404。"
-                    echoContent yellow "CDN 推荐端口（不含 443）: 2053/2083/2087/2096/8443"
-                    echoContent yellow "订阅建议端口: 443（回车默认 443）"
+                    echoContent yellow "确认后将在下一步输入订阅端口（默认443）。"
                     read -r -p "是否现在合并执行订阅初始化？[Y/n]:" mergeSubscribeInitStatus
-                    if [[ -z "${mergeSubscribeInitStatus}" || "${mergeSubscribeInitStatus}" == "y" || "${mergeSubscribeInitStatus}" == "Y" ]]; then
+                    if [[ "${mergeSubscribeInitStatus}" =~ ^[0-9]+$ ]]; then
+                        if ((mergeSubscribeInitStatus >= 1 && mergeSubscribeInitStatus <= 65535)); then
+                            echoContent yellow " ---> 检测到端口输入 ${mergeSubscribeInitStatus}，将直接执行订阅初始化"
+                            echo
+                            installSubscribe "${mergeSubscribeInitStatus}"
+                            readNginxSubscribe
+                        else
+                            echoContent red " ---> 输入端口不合法，已跳过订阅初始化"
+                            echoContent yellow " ---> Reality目标端口将使用443"
+                        fi
+                    elif [[ -z "${mergeSubscribeInitStatus}" || "${mergeSubscribeInitStatus}" == "y" || "${mergeSubscribeInitStatus}" == "Y" ]]; then
                         echo
                         installSubscribe
                         readNginxSubscribe
