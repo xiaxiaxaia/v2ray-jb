@@ -103,3 +103,23 @@ wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/panhu
 ## Stargazers over time
 
 [![Stargazers over time](https://starchart.cc/panhuanghe/v2ray-agent.svg)](https://starchart.cc/panhuanghe/v2ray-agent)
+
+## 同步更新 2026-03
+
+### 更新摘要
+- 已将 `install.sh` 和 `shell/install_en.sh` 同步到新版核心/协议/订阅实现。
+- 已合并核心 + 订阅 + 协议范围内的 bug 修复与优化。
+- 已保持你的上游来源策略：`panhuanghe/v2ray-agent`（未切换到其他上游）。
+- 已为高风险脚本加入安全门禁：默认需要显式输入 `YES`。
+- 已增加 `${nginxStaticPath}200MB.zip`（200MB）测速文件自动生成功能。
+- 已新增迁移文档，包含审计结果、升级/回滚说明与已知差异。
+
+### 兼容性说明
+- 订阅目录结构已对齐到新模型（`default` / `clashMeta` / `sing-box`）。
+- 协议与核心路径扩展到 `sing-box`、`Reality`、`Hysteria2`、`Tuic` 等流程。
+- 高风险脚本默认不再静默执行；非交互执行需显式传入 `--force`。
+- `伪装站管理(菜单8)` 已适配 `sing-box`：按 `Nginx` 配置存在性判定，不再强依赖 `Xray-core`。
+- 为降低配置冲突风险，更换伪装站前会自动备份静态站点目录到 `/etc/v2ray-agent/backup/nginx-static/`。
+- Cloudflare 代理 HTTPS 端口仅支持 443/2053/2083/2087/2096/8443；订阅/伪装端口请选择该列表，否则仅直连。详见 `documents/cloudflare_speedtest.md`。
+- 部署与路径、Cloudflare 橙灰规则、测速文件规范见 `documents/deploy_guide.md`。
+- 详细说明见 `documents/migration_sync_2026-03.md`。
