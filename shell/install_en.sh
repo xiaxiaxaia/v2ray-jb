@@ -4946,7 +4946,9 @@ addCorePort() {
         exit 0
     elif [[ "${selectNewPortType}" == "2" ]]; then
         read -r -p "Please enter the port number:" newPort
-        echoContent yellow "Cloudflare proxy HTTPS ports: 443/2053/2083/2087/2096/8443. Other ports will be direct-only."
+        echoContent yellow "Cloudflare CDN recommended HTTPS ports: 2053/2083/2087/2096/8443 (excluding 443)."
+        echoContent yellow "Subscription service is recommended to use 443 by default."
+        echoContent yellow "Cloudflare proxy HTTPS supported ports: 443/2053/2083/2087/2096/8443. Other ports will be direct-only."
         read -r -p "Please enter the default port number. The subscription port and node port will be changed at the same time. [Enter] Default 443:" defaultPort
         if [[ -n "${defaultPort}" ]]; then
             if ! echo "443 2053 2083 2087 2096 8443" | grep -qw "${defaultPort}"; then

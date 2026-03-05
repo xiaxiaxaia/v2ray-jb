@@ -8434,11 +8434,20 @@ installSubscribe() {
                 exit 0
             fi
         fi
-        echoContent yellow "开始配置订阅，请输入订阅的端口\n"
-        echoContent yellow "Cloudflare 代理 HTTPS 仅支持端口: 443/2053/2083/2087/2096/8443；其他端口只能直连。"
-
-        mapfile -t result < <(initSingBoxPort "${subscribePort}")
-        local subscribeListenPort=${result[-1]}
+        echoContent yellow "开始配置订阅（建议端口默认 443）\n"
+        echoContent yellow "CDN 推荐端口（不含 443）: 2053/2083/2087/2096/8443"
+        echoContent yellow "Cloudflare 代理 HTTPS 支持端口: 443/2053/2083/2087/2096/8443；其他端口只能直连。"
+        local subscribeListenPort=
+        read -r -p "请输入订阅端口[需合法]，[回车]默认443:" subscribeListenPort
+        if [[ -z "${subscribeListenPort}" ]]; then
+            subscribeListenPort=443
+        fi
+        if ! [[ "${subscribeListenPort}" =~ ^[0-9]+$ ]] || ((subscribeListenPort < 1 || subscribeListenPort > 65535)); then
+            echoContent red " ---> 端口输入错误"
+            exit 0
+        fi
+        allowPort "${subscribeListenPort}"
+        allowPort "${subscribeListenPort}" "udp"
         if ! echo "443 2053 2083 2087 2096 8443" | grep -qw "${subscribeListenPort}"; then
             echoContent yellow "提示：端口 ${subscribeListenPort} 不在 Cloudflare 代理允许列表，使用时只能直连。"
         else
@@ -8477,12 +8486,12 @@ installSubscribe() {
             nginxSubscribeSSL="ssl_certificate /etc/v2ray-agent/tls/${subscribeServerName}.crt;ssl_certificate_key /etc/v2ray-agent/tls/${subscribeServerName}.key;"
         fi
         if [[ -n "$(curl --connect-timeout 2 -s -6 http://www.cloudflare.com/cdn-cgi/trace | grep "ip" | cut -d "=" -f 2)" ]]; then
-            listenIPv6="listen [::]:${result[-1]} ${SSLType};"
+            listenIPv6="listen [::]:${subscribeListenPort} ${SSLType};"
         fi
         if echo "${nginxVersion}" | grep -q "1.25" && [[ $(echo "${nginxVersion}" | awk -F "[.]" '{print $3}') -gt 0 ]] || [[ $(echo "${nginxVersion}" | awk -F "[.]" '{print $2}') -gt 25 ]]; then
-            nginxSubscribeListen="listen ${result[-1]} ${SSLType} so_keepalive=on;http2 on;${listenIPv6}"
+            nginxSubscribeListen="listen ${subscribeListenPort} ${SSLType} so_keepalive=on;http2 on;${listenIPv6}"
         else
-            nginxSubscribeListen="listen ${result[-1]} ${SSLType} so_keepalive=on;${listenIPv6}"
+            nginxSubscribeListen="listen ${subscribeListenPort} ${SSLType} so_keepalive=on;${listenIPv6}"
         fi
 
         cat <<EOF >${nginxConfigPath}subscribe.conf
@@ -9223,9 +9232,18 @@ autoRepairCamouflageAfterUserChange() {
     if [[ -z "${targetPort}" ]]; then
         if [[ "${manualMode}" == "true" ]]; then
             echoContent yellow "未检测到订阅端口，请输入。"
-            echoContent yellow "Cloudflare 代理 HTTPS 仅支持: 443/2053/2083/2087/2096/8443，其他端口仅直连。"
-            mapfile -t result < <(initSingBoxPort "${subscribePort}")
-            targetPort=${result[-1]}
+            echoContent yellow "CDN 推荐端口（不含 443）: 2053/2083/2087/2096/8443"
+            echoContent yellow "订阅建议端口: 443（回车默认 443）"
+            read -r -p "请输入订阅端口[回车默认443]:" targetPort
+            if [[ -z "${targetPort}" ]]; then
+                targetPort=443
+            fi
+            if ! [[ "${targetPort}" =~ ^[0-9]+$ ]] || ((targetPort < 1 || targetPort > 65535)); then
+                echoContent red " ---> 端口输入错误，跳过伪装自动修复"
+                return 1
+            fi
+            allowPort "${targetPort}"
+            allowPort "${targetPort}" "udp"
         else
             echoContent red " ---> 未读取到端口，跳过伪装自动修复"
             return 1
@@ -9603,25 +9621,25 @@ initRealityClientServersName() {
             read -r -p "是否使用 ${domain} 此域名作为Reality目标域名 ？[y/n]:" realityServerNameCurrentDomainStatus
             if [[ "${realityServerNameCurrentDomainStatus}" == "y" ]]; then
                 realityServerName="${domain}"
-                if [[ "${selectCoreType}" == "1" ]]; then
-                    if [[ -z "${subscribePort}" ]]; then
+                if [[ -z "${subscribePort}" ]]; then
+                    echoContent skyBlue "\n================ Reality 与订阅联动配置 =================\n"
+                    echoContent yellow "检测到当前未配置订阅端口。"
+                    echoContent yellow "如继续使用当前域名作为 Reality 目标域名，建议现在合并执行订阅初始化，避免同端口场景 /s 路由 404。"
+                    echoContent yellow "CDN 推荐端口（不含 443）: 2053/2083/2087/2096/8443"
+                    echoContent yellow "订阅建议端口: 443（回车默认 443）"
+                    read -r -p "是否现在合并执行订阅初始化？[Y/n]:" mergeSubscribeInitStatus
+                    if [[ -z "${mergeSubscribeInitStatus}" || "${mergeSubscribeInitStatus}" == "y" || "${mergeSubscribeInitStatus}" == "Y" ]]; then
                         echo
                         installSubscribe
                         readNginxSubscribe
-                        realityDomainPort="${subscribePort}"
                     else
-                        realityDomainPort="${subscribePort}"
+                        echoContent yellow " ---> 已跳过订阅初始化，Reality目标端口将使用443"
                     fi
                 fi
-                if [[ "${selectCoreType}" == "2" ]]; then
-                    if [[ -z "${subscribePort}" ]]; then
-                        echo
-                        installSubscribe
-                        readNginxSubscribe
-                        realityDomainPort="${subscribePort}"
-                    else
-                        realityDomainPort="${subscribePort}"
-                    fi
+                if [[ -n "${subscribePort}" ]]; then
+                    realityDomainPort="${subscribePort}"
+                else
+                    realityDomainPort=443
                 fi
             fi
         fi
