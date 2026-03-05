@@ -9133,6 +9133,22 @@ applyNginxBlogTemplateByIndex() {
     generateNginxSpeedtestFile
 }
 
+# 显示伪装模板说明
+showNginxBlogTemplateGuide() {
+    echoContent red "=============================================================="
+    echoContent yellow "# 伪装模板说明"
+    echoContent yellow "1.新手引导"
+    echoContent yellow "2.游戏网站"
+    echoContent yellow "3.个人博客01"
+    echoContent yellow "4.企业站"
+    echoContent yellow "5.解锁加密音乐模板 [https://github.com/ix64/unlock-music]"
+    echoContent yellow "6.mikutap [https://github.com/HFIProgramming/mikutap]"
+    echoContent yellow "7.企业站02"
+    echoContent yellow "8.个人博客02"
+    echoContent yellow "9.404自动跳转百度"
+    echoContent red "=============================================================="
+}
+
 # 为alone.conf补齐订阅路由，避免同端口时/s返回404
 ensureNginxSubscribeRouteInAlone() {
     local aloneConf="${nginxConfigPath}alone.conf"
@@ -9278,6 +9294,7 @@ EOF
     if [[ "${needRebuildAlone}" == true ]]; then
         echoContent yellow "重建伪装站配置: ${aloneConf}"
         if [[ "${manualMode}" == "true" ]]; then
+            showNginxBlogTemplateGuide
             read -r -p "请选择伪装模板[1-9]，[回车]随机:" selectNginxBlogTemplate
             if [[ -n "${selectNginxBlogTemplate}" ]]; then
                 applyNginxBlogTemplateByIndex "${selectNginxBlogTemplate}" || nginxBlog
@@ -9288,6 +9305,7 @@ EOF
         rebuildAloneConf "${targetDomain}" "${targetPort}"
         generateNginxSpeedtestFile
     elif [[ "${manualMode}" == "true" ]]; then
+        showNginxBlogTemplateGuide
         read -r -p "是否更换伪装模板[1-9，回车跳过]:" selectNginxBlogTemplate
         if [[ -n "${selectNginxBlogTemplate}" ]]; then
             applyNginxBlogTemplateByIndex "${selectNginxBlogTemplate}" || true

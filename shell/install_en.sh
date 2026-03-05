@@ -101,6 +101,22 @@ applyNginxBlogTemplateByIndexEn() {
     generateNginxSpeedtestFile
 }
 
+# Show camouflage template guide
+showNginxBlogTemplateGuideEn() {
+    echoContent red "=============================================================="
+    echoContent yellow "# Camouflage template guide"
+    echoContent yellow "1.Newbie guide"
+    echoContent yellow "2.Game website"
+    echoContent yellow "3.Personal blog 01"
+    echoContent yellow "4.Enterprise site"
+    echoContent yellow "5.Unlock encrypted music [https://github.com/ix64/unlock-music]"
+    echoContent yellow "6.mikutap [https://github.com/HFIProgramming/mikutap]"
+    echoContent yellow "7.Enterprise site 02"
+    echoContent yellow "8.Personal blog 02"
+    echoContent yellow "9.404 auto redirect to Baidu"
+    echoContent red "=============================================================="
+}
+
 # Ensure /s route exists in alone.conf for same-port compatibility
 ensureNginxSubscribeRouteInAloneEn() {
     local aloneConf="${nginxConfigPath}alone.conf"
@@ -281,6 +297,7 @@ EOF
     if [[ "${needRebuildAlone}" == true ]]; then
         echoContent yellow "Rebuild camouflage site config: ${aloneConf}"
         if [[ "${manualMode}" == "true" ]]; then
+            showNginxBlogTemplateGuideEn
             read -r -p "Please select camouflage template [1-9], [Enter] random:" selectNginxBlogTemplate
             if [[ -n "${selectNginxBlogTemplate}" ]]; then
                 applyNginxBlogTemplateByIndexEn "${selectNginxBlogTemplate}" || nginxBlog
@@ -291,6 +308,7 @@ EOF
         rebuildAloneConfEn "${targetDomain}" "${targetPort}"
         generateNginxSpeedtestFile
     elif [[ "${manualMode}" == "true" ]]; then
+        showNginxBlogTemplateGuideEn
         read -r -p "Change camouflage template [1-9], [Enter] skip:" selectNginxBlogTemplate
         if [[ -n "${selectNginxBlogTemplate}" ]]; then
             applyNginxBlogTemplateByIndexEn "${selectNginxBlogTemplate}" || true
