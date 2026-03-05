@@ -84,125 +84,52 @@ checkSystem() {
     fi
 }
 
-# sing-box camouflage domain self-check / repair
-checkSingBoxCamouflageEn() {
-
-    if [[ "${coreInstallType}" != "2" && -z "${singBoxConfigPath}" ]]; then
-        echoContent yellow " ---> sing-box not detected, skip."
-        return
+# Apply camouflage template by index
+applyNginxBlogTemplateByIndexEn() {
+    local templateIndex=$1
+    if [[ ! "${templateIndex}" =~ ^[1-9]$ ]]; then
+        echoContent red " ---> Invalid template index, only 1-9 is supported"
+        return 1
     fi
+    backupNginxStaticSite
+    cleanNginxStaticSite
 
-    readNginxSubscribe
-
-    local targetDomain=
-    if [[ -n "${currentHost}" ]]; then
-        targetDomain="${currentHost}"
-    elif [[ -n "${domain}" ]]; then
-        targetDomain="${domain}"
-    else
-        targetDomain="${subscribeDomain}"
-    fi
-
-    if [[ -z "${targetDomain}" ]]; then
-        echoContent red " ---> Domain not found, please configure domain first."
-        return
-    fi
-
-    local targetPort="${subscribePort}"
-    if [[ -z "${targetPort}" ]]; then
-        echoContent yellow "Subscription port not found, please input."
-        echoContent yellow "Cloudflare proxy HTTPS ports: 443/2053/2083/2087/2096/8443; others are direct-only."
-        mapfile -t result < <(initSingBoxPort "${subscribePort}")
-        targetPort=${result[-1]}
-    fi
-
-    if ! echo "443 2053 2083 2087 2096 8443" | grep -qw "${targetPort}"; then
-        echoContent yellow "Notice: port ${targetPort} is not Cloudflare-proxied; it will be direct-only."
-    else
-        echoContent green "Port ${targetPort} can be proxied by Cloudflare."
-    fi
-
-    local certCrt="/etc/v2ray-agent/tls/${targetDomain}.crt"
-    local certKey="/etc/v2ray-agent/tls/${targetDomain}.key"
-
-    if [[ ! -f "${certCrt}" || ! -f "${certKey}" ]]; then
-        echoContent red " ---> Certificate missing (${certCrt}/${certKey}); please issue a certificate first."
-        return
-    fi
-
-    local needRebuildSubscribe=false
-    if [[ ! -f "${nginxConfigPath}subscribe.conf" ]]; then
-        needRebuildSubscribe=true
-    else
-        local confDomain=
-        confDomain=$(grep -m1 "server_name" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}' | sed 's/;//')
-        local confPort=
-        confPort=$(grep -m1 "listen" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}')
-        if [[ "${confDomain}" != "${targetDomain}" || -z "${confPort}" ]]; then
-            needRebuildSubscribe=true
-        fi
-    fi
-
-    if [[ "${needRebuildSubscribe}" == true ]]; then
-        echoContent yellow "Rebuild Nginx subscribe config: ${nginxConfigPath}subscribe.conf"
-
-        local listenIPv6=
-        if [[ -n "$(curl --connect-timeout 2 -s -6 http://www.cloudflare.com/cdn-cgi/trace | grep 'ip')" ]]; then
-            listenIPv6="listen [::]:${targetPort} ssl;"
-        fi
-        local nginxSubscribeListen="listen ${targetPort} ssl so_keepalive=on;http2 on;${listenIPv6}"
-
-        cat <<EOF >${nginxConfigPath}subscribe.conf
-server {
-    ${nginxSubscribeListen}
-    server_name ${targetDomain};
-    ssl_certificate /etc/v2ray-agent/tls/${targetDomain}.crt;
-    ssl_certificate_key /etc/v2ray-agent/tls/${targetDomain}.key;
-    ssl_protocols              TLSv1.2 TLSv1.3;
-    ssl_ciphers                TLS13_AES_128_GCM_SHA256:TLS13_AES_256_GCM_SHA384:TLS13_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305;
-    ssl_prefer_server_ciphers  on;
-
-    resolver                   1.1.1.1 valid=60s;
-    resolver_timeout           2s;
-    client_max_body_size 100m;
-    root ${nginxStaticPath};
-    location ~ ^/s/(clashMeta|default|clashMetaProfiles|sing-box|sing-box_profiles)/(.*) {
-        default_type 'text/plain; charset=utf-8';
-        alias /etc/v2ray-agent/subscribe/\$1/\$2;
-    }
-    location / {
-    }
-}
-EOF
-    fi
-
-    local needRebuildAlone=false
-    if [[ ! -f "${nginxConfigPath}alone.conf" ]]; then
-        needRebuildAlone=true
-    elif ! grep -q "${targetDomain}" "${nginxConfigPath}alone.conf"; then
-        needRebuildAlone=true
-    fi
-
-    if [[ "${needRebuildAlone}" == true ]]; then
-        echoContent yellow "Rebuild camouflage site config: ${nginxConfigPath}alone.conf"
-        read -r -p "Select camouflage template? [y/n]:" selectNginxBlogTemplate
-        if [[ "${selectNginxBlogTemplate}" == "y" ]]; then
-            nginxBlog
-        fi
-        rebuildAloneConfEn "${targetDomain}" "${targetPort}"
-        generateNginxSpeedtestFile
-    fi
-
-    handleNginx stop
-    handleNginx start
-    if [[ -f "${nginxConfigPath}alone.conf" ]]; then
-        echoContent green " ---> sing-box camouflage domain check/repair completed"
-    else
-        echoContent red " ---> Camouflage config generation failed, please check certificate and permissions"
-    fi
+    wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/panhuanghe/v2ray-agent/master/fodder/blog/unable/html${templateIndex}.zip" >/dev/null
+    unzip -o "${nginxStaticPath}html${templateIndex}.zip" -d "${nginxStaticPath}" >/dev/null
+    rm -f "${nginxStaticPath}html${templateIndex}.zip*"
+    echoContent green " ---> Camouflage template ${templateIndex} applied"
+    generateNginxSpeedtestFile
 }
 
-# rebuild alone.conf
+# Ensure /s route exists in alone.conf for same-port compatibility
+ensureNginxSubscribeRouteInAloneEn() {
+    local aloneConf="${nginxConfigPath}alone.conf"
+    if [[ ! -f "${aloneConf}" ]]; then
+        return 0
+    fi
+    if grep -qE 'location[[:space:]]+~[[:space:]]+\^/s/\(clashMeta\|default\|clashMetaProfiles\|sing-box\|sing-box_profiles\)/\(\.\*\)' "${aloneConf}" || grep -qE 'location[[:space:]]+/s/' "${aloneConf}"; then
+        return 0
+    fi
+
+    local tmpConf="${aloneConf}.tmp.$$"
+    if awk '
+/^[[:space:]]*location[[:space:]]*\/[[:space:]]*\{/ {
+    print "    location ~ ^/s/(clashMeta|default|clashMetaProfiles|sing-box|sing-box_profiles)/(.*) {"
+    print "        default_type '\''text/plain; charset=utf-8'\'';"
+    print "        alias /etc/v2ray-agent/subscribe/$1/$2;"
+    print "    }"
+}
+{ print }
+' "${aloneConf}" >"${tmpConf}" && mv "${tmpConf}" "${aloneConf}"; then
+        echoContent yellow " ---> Subscription route has been injected into alone.conf"
+        return 0
+    fi
+    rm -f "${tmpConf}" >/dev/null 2>&1
+    echoContent red " ---> Failed to inject subscription route into alone.conf"
+    return 1
+}
+
+# Rebuild alone.conf
 rebuildAloneConfEn() {
     local domain=$1
     local port=$2
@@ -233,6 +160,176 @@ server {
 }
 EOF
     echoContent green " ---> alone.conf generated: ${nginxConfigPath}alone.conf"
+}
+
+# Automatic camouflage repair after user changes
+autoRepairCamouflageAfterUserChangeEn() {
+    local mode="${1:-auto}"
+    local manualMode=false
+    if [[ "${mode}" == "manual" ]]; then
+        manualMode=true
+    fi
+
+    local aloneConf="${nginxConfigPath}alone.conf"
+    local subscribeConf="${nginxConfigPath}subscribe.conf"
+    if [[ ! -f "${aloneConf}" && ! -f "${subscribeConf}" ]]; then
+        return 0
+    fi
+
+    readNginxSubscribe
+    local targetDomain=
+    if [[ -n "${currentHost}" ]]; then
+        targetDomain="${currentHost}"
+    elif [[ -n "${domain}" ]]; then
+        targetDomain="${domain}"
+    elif [[ -n "${subscribeDomain}" ]]; then
+        targetDomain="${subscribeDomain}"
+    elif [[ -f "${subscribeConf}" ]]; then
+        targetDomain=$(grep -m1 "server_name" "${subscribeConf}" 2>/dev/null | awk '{print $2}' | sed 's/;//')
+    elif [[ -f "${aloneConf}" ]]; then
+        targetDomain=$(grep "server_name" "${aloneConf}" 2>/dev/null | awk '{print $2}' | sed 's/;//' | grep -v '^_$' | head -n1)
+    fi
+
+    if [[ -z "${targetDomain}" ]]; then
+        echoContent red " ---> Domain is empty, skip camouflage repair"
+        return 1
+    fi
+
+    local targetPort="${subscribePort}"
+    if [[ -z "${targetPort}" && -f "${subscribeConf}" ]]; then
+        targetPort=$(grep -m1 "listen" "${subscribeConf}" 2>/dev/null | awk '{print $2}' | tr -d ';')
+    fi
+    if [[ -z "${targetPort}" && -f "${aloneConf}" ]]; then
+        targetPort=$(grep -m1 "listen .*ssl" "${aloneConf}" 2>/dev/null | awk '{print $2}' | tr -d ';')
+    fi
+    targetPort=${targetPort##*:}
+    targetPort=${targetPort//]/}
+
+    if [[ -z "${targetPort}" ]]; then
+        if [[ "${manualMode}" == "true" ]]; then
+            echoContent yellow "Subscription port not found, please input."
+            read -r -p "Port [Enter for 443]:" targetPort
+            if [[ -z "${targetPort}" ]]; then
+                targetPort=443
+            fi
+        else
+            echoContent red " ---> Port is empty, skip camouflage repair"
+            return 1
+        fi
+    fi
+
+    local certCrt="/etc/v2ray-agent/tls/${targetDomain}.crt"
+    local certKey="/etc/v2ray-agent/tls/${targetDomain}.key"
+    if [[ ! -f "${certCrt}" || ! -f "${certKey}" ]]; then
+        echoContent red " ---> Certificate missing (${certCrt}/${certKey}), skip camouflage repair"
+        return 1
+    fi
+
+    local needRebuildSubscribe=false
+    if [[ ! -f "${subscribeConf}" ]]; then
+        needRebuildSubscribe=true
+    else
+        local confDomain=
+        confDomain=$(grep -m1 "server_name" "${subscribeConf}" 2>/dev/null | awk '{print $2}' | sed 's/;//')
+        local confPort=
+        confPort=$(grep -m1 "listen" "${subscribeConf}" 2>/dev/null | awk '{print $2}' | tr -d ';')
+        confPort=${confPort##*:}
+        if [[ "${confDomain}" != "${targetDomain}" || -z "${confPort}" || "${confPort}" != "${targetPort}" ]]; then
+            needRebuildSubscribe=true
+        fi
+    fi
+
+    if [[ "${needRebuildSubscribe}" == true ]]; then
+        echoContent yellow "Rebuild Nginx subscribe config: ${subscribeConf}"
+        local listenIPv6=
+        if [[ -n "$(curl --connect-timeout 2 -s -6 http://www.cloudflare.com/cdn-cgi/trace | grep 'ip')" ]]; then
+            listenIPv6="listen [::]:${targetPort} ssl;"
+        fi
+        local nginxSubscribeListen="listen ${targetPort} ssl so_keepalive=on;http2 on;${listenIPv6}"
+
+        cat <<EOF >${subscribeConf}
+server {
+    ${nginxSubscribeListen}
+    server_name ${targetDomain};
+    ssl_certificate /etc/v2ray-agent/tls/${targetDomain}.crt;
+    ssl_certificate_key /etc/v2ray-agent/tls/${targetDomain}.key;
+    ssl_protocols              TLSv1.2 TLSv1.3;
+    ssl_ciphers                TLS13_AES_128_GCM_SHA256:TLS13_AES_256_GCM_SHA384:TLS13_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers  on;
+
+    resolver                   1.1.1.1 valid=60s;
+    resolver_timeout           2s;
+    client_max_body_size 100m;
+    root ${nginxStaticPath};
+    location ~ ^/s/(clashMeta|default|clashMetaProfiles|sing-box|sing-box_profiles)/(.*) {
+        default_type 'text/plain; charset=utf-8';
+        alias /etc/v2ray-agent/subscribe/\$1/\$2;
+    }
+    location / {
+    }
+}
+EOF
+    fi
+
+    local needRebuildAlone=false
+    if [[ ! -f "${aloneConf}" ]]; then
+        needRebuildAlone=true
+    elif ! grep -q "${targetDomain}" "${aloneConf}"; then
+        needRebuildAlone=true
+    fi
+
+    if [[ "${needRebuildAlone}" == true ]]; then
+        echoContent yellow "Rebuild camouflage site config: ${aloneConf}"
+        if [[ "${manualMode}" == "true" ]]; then
+            read -r -p "Please select camouflage template [1-9], [Enter] random:" selectNginxBlogTemplate
+            if [[ -n "${selectNginxBlogTemplate}" ]]; then
+                applyNginxBlogTemplateByIndexEn "${selectNginxBlogTemplate}" || nginxBlog
+            else
+                nginxBlog
+            fi
+        fi
+        rebuildAloneConfEn "${targetDomain}" "${targetPort}"
+        generateNginxSpeedtestFile
+    elif [[ "${manualMode}" == "true" ]]; then
+        read -r -p "Change camouflage template [1-9], [Enter] skip:" selectNginxBlogTemplate
+        if [[ -n "${selectNginxBlogTemplate}" ]]; then
+            applyNginxBlogTemplateByIndexEn "${selectNginxBlogTemplate}" || true
+        fi
+    fi
+
+    if ! ensureNginxSubscribeRouteInAloneEn; then
+        echoContent red " ---> Camouflage repair failed: cannot patch /s subscription route"
+        return 1
+    fi
+    if ! nginx -t >/tmp/v2ray-agent-nginx-test-en.log 2>&1; then
+        echoContent red " ---> Nginx config test failed after automatic repair"
+        echoContent yellow " ---> See /tmp/v2ray-agent-nginx-test-en.log"
+        return 1
+    fi
+
+    if [[ "${release}" == "alpine" ]]; then
+        rc-service nginx reload >/dev/null 2>&1 || {
+            handleNginx stop
+            handleNginx start
+        }
+    else
+        systemctl reload nginx >/dev/null 2>&1 || {
+            handleNginx stop
+            handleNginx start
+        }
+    fi
+
+    if [[ "${manualMode}" == "true" ]]; then
+        echoContent green " ---> Camouflage domain check/repair completed"
+    fi
+    return 0
+}
+
+# Camouflage domain check / repair
+checkSingBoxCamouflageEn() {
+    if ! autoRepairCamouflageAfterUserChangeEn manual; then
+        echoContent red " ---> Camouflage domain check/repair failed"
+    fi
 }
 
 # Check CPU provider
@@ -378,6 +475,10 @@ initVar() {
     # nginx configuration file path
     nginxConfigPath=/etc/nginx/conf.d/
     nginxStaticPath=/usr/share/nginx/html/
+    # nginx subscribe status
+    subscribePort=
+    subscribeType=
+    subscribeDomain=
 
     # Is it a preview version?
     prereleaseStatus=false
@@ -456,6 +557,25 @@ readCustomPort() {
         port=$(jq -r .inbounds[0].port "${configPath}${frontingType}.json")
         if [[ "${port}" != "443" ]]; then
             customPort=${port}
+        fi
+    fi
+}
+
+# Read nginx subscribe config
+readNginxSubscribe() {
+    subscribeType="https"
+    subscribePort=
+    subscribeDomain=
+    if [[ -f "${nginxConfigPath}subscribe.conf" ]]; then
+        subscribePort=$(grep -m1 "listen" "${nginxConfigPath}subscribe.conf" | awk '{print $2}' | tr -d ';')
+        subscribePort=${subscribePort##*:}
+        subscribeDomain=$(grep -m1 "server_name" "${nginxConfigPath}subscribe.conf" | awk '{print $2}')
+        subscribeDomain=${subscribeDomain//;/}
+        if [[ -n "${currentHost}" && "${subscribeDomain}" != "${currentHost}" ]]; then
+            subscribePort=
+            subscribeType=
+        elif ! grep "listen" "${nginxConfigPath}subscribe.conf" | grep -q "ssl"; then
+            subscribeType="http"
         fi
     fi
 }
@@ -5204,6 +5324,13 @@ addUserXray() {
     done
 
     reloadCore
+    if ! autoRepairCamouflageAfterUserChangeEn auto; then
+        echoContent yellow " ---> Camouflage auto-repair failed after user change, please check nginx config"
+    fi
+    readNginxSubscribe
+    if [[ -n "${subscribePort}" ]]; then
+        subscribe auto
+    fi
     echoContent green " ---> Adding completed"
     manageAccount 1
 }
@@ -5320,6 +5447,13 @@ addUser() {
     done
 
     reloadCore
+    if ! autoRepairCamouflageAfterUserChangeEn auto; then
+        echoContent yellow " ---> Camouflage auto-repair failed after user change, please check nginx config"
+    fi
+    readNginxSubscribe
+    if [[ -n "${subscribePort}" ]]; then
+        subscribe auto
+    fi
     echoContent green " ---> Adding completed"
     manageAccount 1
 }
@@ -5407,6 +5541,13 @@ removeUser() {
             echo "${tuicResult}" | jq . >"${tuicConfigPath}config.json"
         fi
         reloadCore
+        if ! autoRepairCamouflageAfterUserChangeEn auto; then
+            echoContent yellow " ---> Camouflage auto-repair failed after user change, please check nginx config"
+        fi
+        readNginxSubscribe
+        if [[ -n "${subscribePort}" ]]; then
+            subscribe auto
+        fi
     fi
     manageAccount 1
 }
@@ -7215,116 +7356,6 @@ addOtherSubscribe() {
     fi
 }
 
-# sing-box camouflage domain self-check / repair
-checkSingBoxCamouflageEn() {
-
-    if [[ "${coreInstallType}" != "2" && -z "${singBoxConfigPath}" ]]; then
-        echoContent yellow " ---> sing-box not detected, skip."
-        return
-    fi
-
-    readNginxSubscribe
-
-    local targetDomain=
-    if [[ -n "${currentHost}" ]]; then
-        targetDomain="${currentHost}"
-    elif [[ -n "${domain}" ]]; then
-        targetDomain="${domain}"
-    else
-        targetDomain="${subscribeDomain}"
-    fi
-
-    if [[ -z "${targetDomain}" ]]; then
-        echoContent red " ---> Domain not found, please configure domain first."
-        return
-    fi
-
-    local targetPort="${subscribePort}"
-    if [[ -z "${targetPort}" ]]; then
-        echoContent yellow "Subscription port not found, please input."
-        echoContent yellow "Cloudflare proxy HTTPS ports: 443/2053/2083/2087/2096/8443; others are direct-only."
-        mapfile -t result < <(initSingBoxPort "${subscribePort}")
-        targetPort=${result[-1]}
-    fi
-
-    if ! echo "443 2053 2083 2087 2096 8443" | grep -qw "${targetPort}"; then
-        echoContent yellow "Notice: port ${targetPort} is not Cloudflare-proxied; it will be direct-only."
-    else
-        echoContent green "Port ${targetPort} can be proxied by Cloudflare."
-    fi
-
-    local certCrt="/etc/v2ray-agent/tls/${targetDomain}.crt"
-    local certKey="/etc/v2ray-agent/tls/${targetDomain}.key"
-
-    if [[ ! -f "${certCrt}" || ! -f "${certKey}" ]]; then
-        echoContent red " ---> Certificate missing (${certCrt}/${certKey}); please issue a certificate first."
-        return
-    fi
-
-    local needRebuildSubscribe=false
-    if [[ ! -f "${nginxConfigPath}subscribe.conf" ]]; then
-        needRebuildSubscribe=true
-    else
-        local confDomain=
-        confDomain=$(grep -m1 "server_name" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}' | sed 's/;//')
-        local confPort=
-        confPort=$(grep -m1 "listen" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}')
-        if [[ "${confDomain}" != "${targetDomain}" || -z "${confPort}" ]]; then
-            needRebuildSubscribe=true
-        fi
-    fi
-
-    if [[ "${needRebuildSubscribe}" == true ]]; then
-        echoContent yellow "Rebuild Nginx subscribe config: ${nginxConfigPath}subscribe.conf"
-
-        local listenIPv6=
-        if [[ -n "$(curl --connect-timeout 2 -s -6 http://www.cloudflare.com/cdn-cgi/trace | grep 'ip')" ]]; then
-            listenIPv6="listen [::]:${targetPort} ssl;"
-        fi
-        local nginxSubscribeListen="listen ${targetPort} ssl so_keepalive=on;http2 on;${listenIPv6}"
-
-        cat <<EOF >${nginxConfigPath}subscribe.conf
-server {
-    ${nginxSubscribeListen}
-    server_name ${targetDomain};
-    ssl_certificate /etc/v2ray-agent/tls/${targetDomain}.crt;
-    ssl_certificate_key /etc/v2ray-agent/tls/${targetDomain}.key;
-    ssl_protocols              TLSv1.2 TLSv1.3;
-    ssl_ciphers                TLS13_AES_128_GCM_SHA256:TLS13_AES_256_GCM_SHA384:TLS13_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305;
-    ssl_prefer_server_ciphers  on;
-
-    resolver                   1.1.1.1 valid=60s;
-    resolver_timeout           2s;
-    client_max_body_size 100m;
-    root ${nginxStaticPath};
-    location ~ ^/s/(clashMeta|default|clashMetaProfiles|sing-box|sing-box_profiles)/(.*) {
-        default_type 'text/plain; charset=utf-8';
-        alias /etc/v2ray-agent/subscribe/\$1/\$2;
-    }
-    location / {
-    }
-}
-EOF
-    fi
-
-    local needRebuildAlone=false
-    if [[ ! -f "${nginxConfigPath}alone.conf" ]]; then
-        needRebuildAlone=true
-    elif ! grep -q "${targetDomain}" "${nginxConfigPath}alone.conf"; then
-        needRebuildAlone=true
-    fi
-
-    if [[ "${needRebuildAlone}" == true ]]; then
-        echoContent yellow "Rebuild camouflage site config: ${nginxConfigPath}alone.conf"
-        nginxBlog
-    fi
-
-    handleNginx stop
-    handleNginx start
-    generateNginxSpeedtestFile
-    echoContent green " ---> sing-box camouflage domain check/repair completed"
-}
-
 # clashMeta configuration file
 clashMetaConfig() {
     local url=$1
@@ -7732,6 +7763,7 @@ initRandomSalt() {
 }
 # Subscribe
 subscribe() {
+    local autoMode=$1
     readInstallProtocolType
 
     if echo "${currentInstallProtocolType}" | grep -q 0 && [[ -n "${configPath}" ]]; then
@@ -7743,13 +7775,17 @@ subscribe() {
         echoContent yellow "# Does not affect the content of added remote subscriptions\n"
 
         if [[ -f "/etc/v2ray-agent/subscribe_local/subscribeSalt" && -n $(cat "/etc/v2ray-agent/subscribe_local/subscribeSalt") ]]; then
-            read -r -p "Read the Salt set by the last installation. Do you want to use the Salt generated last time? [y/n]:" historySaltStatus
-            if [[ "${historySaltStatus}" == "y" ]]; then
+            if [[ "${autoMode}" == "auto" ]]; then
                 subscribeSalt=$(cat /etc/v2ray-agent/subscribe_local/subscribeSalt)
             else
-                read -r -p "Please enter the salt value, [Enter] use random:" subscribeSalt
+                read -r -p "Read the Salt set by the last installation. Do you want to use the Salt generated last time? [y/n]:" historySaltStatus
+                if [[ "${historySaltStatus}" == "y" ]]; then
+                    subscribeSalt=$(cat /etc/v2ray-agent/subscribe_local/subscribeSalt)
+                else
+                    read -r -p "Please enter the salt value, [Enter] use random:" subscribeSalt
+                fi
             fi
-        else
+        elif [[ "${autoMode}" != "auto" ]]; then
             read -r -p "Please enter the salt value, [Enter] use random:" subscribeSalt
         fi
 

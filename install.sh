@@ -6147,6 +6147,9 @@ addUser() {
         fi
     done
     reloadCore
+    if ! autoRepairCamouflageAfterUserChange auto; then
+        echoContent yellow " ---> 账号变更后伪装域名自动修复失败，请检查Nginx配置"
+    fi
     echoContent green " ---> 添加完成"
     readNginxSubscribe
     if [[ -n "${subscribePort}" ]]; then
@@ -6253,6 +6256,9 @@ removeUser() {
             echo "${anyTLSResult}" | jq . >"${singBoxConfigPath}13_anytls_inbounds.json"
         fi
         reloadCore
+        if ! autoRepairCamouflageAfterUserChange auto; then
+            echoContent yellow " ---> 账号变更后伪装域名自动修复失败，请检查Nginx配置"
+        fi
         readNginxSubscribe
         if [[ -n "${subscribePort}" ]]; then
             subscribe false
@@ -9105,75 +9111,141 @@ subscribe() {
     fi
 }
 
-# sing-box 伪装域名自检/修复
-checkSingBoxCamouflage() {
+# 按编号应用伪装模板
+applyNginxBlogTemplateByIndex() {
+    local templateIndex=$1
+    if [[ ! "${templateIndex}" =~ ^[1-9]$ ]]; then
+        echoContent red " ---> 模板编号输入有误，仅支持 1-9"
+        return 1
+    fi
+    backupNginxStaticSite
+    cleanNginxStaticSite
 
-    if [[ "${coreInstallType}" != "2" && -z "${singBoxConfigPath}" ]]; then
-        echoContent yellow " ---> 未检测到 sing-box 环境，跳过。"
-        return
+    if [[ "${release}" == "alpine" ]]; then
+        wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/panhuanghe/v2ray-agent/master/fodder/blog/unable/html${templateIndex}.zip"
+    else
+        wget -q "${wgetShowProgressStatus}" -P "${nginxStaticPath}" "https://raw.githubusercontent.com/panhuanghe/v2ray-agent/master/fodder/blog/unable/html${templateIndex}.zip"
+    fi
+
+    unzip -o "${nginxStaticPath}html${templateIndex}.zip" -d "${nginxStaticPath}" >/dev/null
+    rm -f "${nginxStaticPath}html${templateIndex}.zip*"
+    echoContent green " ---> 伪装模板 ${templateIndex} 已应用"
+    generateNginxSpeedtestFile
+}
+
+# 为alone.conf补齐订阅路由，避免同端口时/s返回404
+ensureNginxSubscribeRouteInAlone() {
+    local aloneConf="${nginxConfigPath}alone.conf"
+    if [[ ! -f "${aloneConf}" ]]; then
+        return 0
+    fi
+    if grep -qE 'location[[:space:]]+~[[:space:]]+\^/s/\(clashMeta\|default\|clashMetaProfiles\|sing-box\|sing-box_profiles\)/\(\.\*\)' "${aloneConf}" || grep -qE 'location[[:space:]]+/s/' "${aloneConf}"; then
+        return 0
+    fi
+
+    local tmpConf="${aloneConf}.tmp.$$"
+    if awk '
+/^[[:space:]]*location[[:space:]]*\/[[:space:]]*\{/ {
+    print "    location ~ ^/s/(clashMeta|default|clashMetaProfiles|sing-box|sing-box_profiles)/(.*) {"
+    print "        default_type '\''text/plain; charset=utf-8'\'';"
+    print "        alias /etc/v2ray-agent/subscribe/$1/$2;"
+    print "    }"
+}
+{ print }
+' "${aloneConf}" >"${tmpConf}" && mv "${tmpConf}" "${aloneConf}"; then
+        echoContent yellow " ---> 已为 alone.conf 自动补齐订阅路由"
+        return 0
+    fi
+    rm -f "${tmpConf}" >/dev/null 2>&1
+    echoContent red " ---> 补齐 alone.conf 订阅路由失败"
+    return 1
+}
+
+# 账号变更后自动修复伪装域名配置
+autoRepairCamouflageAfterUserChange() {
+    local mode="${1:-auto}"
+    local manualMode=false
+    if [[ "${mode}" == "manual" ]]; then
+        manualMode=true
+    fi
+
+    local aloneConf="${nginxConfigPath}alone.conf"
+    local subscribeConf="${nginxConfigPath}subscribe.conf"
+    if [[ ! -f "${aloneConf}" && ! -f "${subscribeConf}" ]]; then
+        return 0
     fi
 
     readNginxSubscribe
-
     local targetDomain=
     if [[ -n "${currentHost}" ]]; then
         targetDomain="${currentHost}"
     elif [[ -n "${domain}" ]]; then
         targetDomain="${domain}"
-    else
+    elif [[ -n "${subscribeDomain}" ]]; then
         targetDomain="${subscribeDomain}"
+    elif [[ -f "${subscribeConf}" ]]; then
+        targetDomain=$(grep -m1 "server_name" "${subscribeConf}" 2>/dev/null | awk '{print $2}' | sed 's/;//')
+    elif [[ -f "${aloneConf}" ]]; then
+        targetDomain=$(grep "server_name" "${aloneConf}" 2>/dev/null | awk '{print $2}' | sed 's/;//' | grep -v '^_$' | head -n1)
     fi
 
     if [[ -z "${targetDomain}" ]]; then
-        echoContent red " ---> 未找到域名信息，请先完成域名配置。"
-        return
+        echoContent red " ---> 未找到域名信息，跳过伪装自动修复"
+        return 1
     fi
 
     local targetPort="${subscribePort}"
-    if [[ -z "${targetPort}" ]]; then
-        echoContent yellow "未检测到订阅端口，请输入。"
-        echoContent yellow "Cloudflare 代理 HTTPS 仅支持: 443/2053/2083/2087/2096/8443，其他端口仅直连。"
-        mapfile -t result < <(initSingBoxPort "${subscribePort}")
-        targetPort=${result[-1]}
+    if [[ -z "${targetPort}" && -f "${subscribeConf}" ]]; then
+        targetPort=$(grep -m1 "listen" "${subscribeConf}" 2>/dev/null | awk '{print $2}' | tr -d ';')
     fi
+    if [[ -z "${targetPort}" && -f "${aloneConf}" ]]; then
+        targetPort=$(grep -m1 "listen .*ssl" "${aloneConf}" 2>/dev/null | awk '{print $2}' | tr -d ';')
+    fi
+    targetPort=${targetPort##*:}
+    targetPort=${targetPort//]/}
 
-    if ! echo "443 2053 2083 2087 2096 8443" | grep -qw "${targetPort}"; then
-        echoContent yellow "提示：端口 ${targetPort} 不在 Cloudflare 代理列表，使用时仅直连。"
-    else
-        echoContent green "端口 ${targetPort} 可被 Cloudflare 代理。"
+    if [[ -z "${targetPort}" ]]; then
+        if [[ "${manualMode}" == "true" ]]; then
+            echoContent yellow "未检测到订阅端口，请输入。"
+            echoContent yellow "Cloudflare 代理 HTTPS 仅支持: 443/2053/2083/2087/2096/8443，其他端口仅直连。"
+            mapfile -t result < <(initSingBoxPort "${subscribePort}")
+            targetPort=${result[-1]}
+        else
+            echoContent red " ---> 未读取到端口，跳过伪装自动修复"
+            return 1
+        fi
     fi
 
     local certCrt="/etc/v2ray-agent/tls/${targetDomain}.crt"
     local certKey="/etc/v2ray-agent/tls/${targetDomain}.key"
-
     if [[ ! -f "${certCrt}" || ! -f "${certKey}" ]]; then
-        echoContent red " ---> 未找到证书 ${certCrt} / ${certKey}，请先申请证书后再修复。"
-        return
+        echoContent red " ---> 未找到证书 ${certCrt} / ${certKey}，跳过伪装自动修复"
+        return 1
     fi
 
     local needRebuildSubscribe=false
-    if [[ ! -f "${nginxConfigPath}subscribe.conf" ]]; then
+    if [[ ! -f "${subscribeConf}" ]]; then
         needRebuildSubscribe=true
     else
         local confDomain=
-        confDomain=$(grep -m1 "server_name" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}' | sed 's/;//')
+        confDomain=$(grep -m1 "server_name" "${subscribeConf}" 2>/dev/null | awk '{print $2}' | sed 's/;//')
         local confPort=
-        confPort=$(grep -m1 "listen" "${nginxConfigPath}subscribe.conf" 2>/dev/null | awk '{print $2}')
-        if [[ "${confDomain}" != "${targetDomain}" || -z "${confPort}" ]]; then
+        confPort=$(grep -m1 "listen" "${subscribeConf}" 2>/dev/null | awk '{print $2}' | tr -d ';')
+        confPort=${confPort##*:}
+        if [[ "${confDomain}" != "${targetDomain}" || -z "${confPort}" || "${confPort}" != "${targetPort}" ]]; then
             needRebuildSubscribe=true
         fi
     fi
 
     if [[ "${needRebuildSubscribe}" == true ]]; then
-        echoContent yellow "重建订阅 Nginx 配置: ${nginxConfigPath}subscribe.conf"
+        echoContent yellow "重建订阅 Nginx 配置: ${subscribeConf}"
 
         local listenIPv6=
         if [[ -n "$(curl --connect-timeout 2 -s -6 http://www.cloudflare.com/cdn-cgi/trace | grep 'ip')" ]]; then
             listenIPv6="listen [::]:${targetPort} ssl;"
         fi
         local nginxSubscribeListen="listen ${targetPort} ssl so_keepalive=on;http2 on;${listenIPv6}"
-
-        cat <<EOF >${nginxConfigPath}subscribe.conf
+        cat <<EOF >${subscribeConf}
 server {
     ${nginxSubscribeListen}
     server_name ${targetDomain};
@@ -9198,28 +9270,62 @@ EOF
     fi
 
     local needRebuildAlone=false
-    if [[ ! -f "${nginxConfigPath}alone.conf" ]]; then
+    if [[ ! -f "${aloneConf}" ]]; then
         needRebuildAlone=true
-    elif ! grep -q "${targetDomain}" "${nginxConfigPath}alone.conf"; then
+    elif ! grep -q "${targetDomain}" "${aloneConf}"; then
         needRebuildAlone=true
     fi
-
     if [[ "${needRebuildAlone}" == true ]]; then
-        echoContent yellow "重建伪装站配置: ${nginxConfigPath}alone.conf"
-        read -r -p "是否选择伪装模板[y/n]:" selectNginxBlogTemplate
-        if [[ "${selectNginxBlogTemplate}" == "y" ]]; then
-            nginxBlog
+        echoContent yellow "重建伪装站配置: ${aloneConf}"
+        if [[ "${manualMode}" == "true" ]]; then
+            read -r -p "请选择伪装模板[1-9]，[回车]随机:" selectNginxBlogTemplate
+            if [[ -n "${selectNginxBlogTemplate}" ]]; then
+                applyNginxBlogTemplateByIndex "${selectNginxBlogTemplate}" || nginxBlog
+            else
+                nginxBlog
+            fi
         fi
         rebuildAloneConf "${targetDomain}" "${targetPort}"
         generateNginxSpeedtestFile
+    elif [[ "${manualMode}" == "true" ]]; then
+        read -r -p "是否更换伪装模板[1-9，回车跳过]:" selectNginxBlogTemplate
+        if [[ -n "${selectNginxBlogTemplate}" ]]; then
+            applyNginxBlogTemplateByIndex "${selectNginxBlogTemplate}" || true
+        fi
     fi
 
-    handleNginx stop
-    handleNginx start
-    if [[ -f "${nginxConfigPath}alone.conf" ]]; then
-        echoContent green " ---> sing-box 伪装域名自检/修复完成"
+    if ! ensureNginxSubscribeRouteInAlone; then
+        echoContent red " ---> 伪装修复失败：无法补齐 /s 订阅路由"
+        return 1
+    fi
+    if ! nginx -t >/tmp/v2ray-agent-nginx-test.log 2>&1; then
+        echoContent red " ---> Nginx 配置校验失败，自动修复未生效"
+        echoContent yellow " ---> 详情见 /tmp/v2ray-agent-nginx-test.log"
+        return 1
+    fi
+
+    if [[ "${release}" == "alpine" ]]; then
+        rc-service nginx reload >/dev/null 2>&1 || {
+            handleNginx stop
+            handleNginx start
+        }
     else
-        echoContent red " ---> 伪装站配置生成失败，请检查证书与目录权限"
+        systemctl reload nginx >/dev/null 2>&1 || {
+            handleNginx stop
+            handleNginx start
+        }
+    fi
+
+    if [[ "${manualMode}" == "true" ]]; then
+        echoContent green " ---> 伪装域名自检/修复完成"
+    fi
+    return 0
+}
+
+# sing-box 伪装域名自检/修复
+checkSingBoxCamouflage() {
+    if ! autoRepairCamouflageAfterUserChange manual; then
+        echoContent red " ---> 伪装域名自检/修复失败，请检查证书、域名与Nginx配置"
     fi
 }
 
